@@ -1,14 +1,7 @@
-# from transformers import AutoModelForCausalLM
-
-# def get_model(**kwargs):
-#     if kwargs.pop("model_parallel")==True:
-#         model = AutoModelForCausalLM.from_pretrained(device_map="auto", **kwargs)
-#     else:
-#         model = AutoModelForCausalLM.from_pretrained(**kwargs)
-#     return model
-
 import torch
 from huggingface_hub import hf_hub_download
+
+from transformers import AutoModelForCausalLM
 
 # MÀY PHẢI PASTE TOÀN BỘ ĐỊNH NGHĨA CLASS TinyRecursiveModel CỦA MÀY VÀO ĐÂY
 # (Hoặc import nó từ file code của mày, ví dụ: from my_custom_code import TinyRecursiveModel)
@@ -49,4 +42,12 @@ def get_model(pretrained_model_name_or_path, **kwargs):
 
     # --- ĐOẠN CODE GỐC CỦA ADAPTLLMS GIỮ NGUYÊN BÊN DƯỚI ---
     # (Khúc này thường là auto_model = AutoModelForCausalLM.from_pretrained(pretrained_model_name_or_path, ...))
-    ...
+
+# from transformers import AutoModelForCausalLM
+
+def get_model(**kwargs):
+    if kwargs.pop("model_parallel")==True:
+        model = AutoModelForCausalLM.from_pretrained(device_map="auto", **kwargs)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(**kwargs)
+    return model
