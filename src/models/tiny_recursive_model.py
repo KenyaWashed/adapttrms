@@ -271,7 +271,7 @@ class TinyRecursiveModel(nn.Module):
         """
         B, T = input_ids.shape
         T = min(T, self.max_seq_len)
-        input_ids = input_ids[:, :T]
+        input_ids = input_ids[:, :T].clamp(0, self.vocab_size - 1)
 
         x = self.get_embeddings(input_ids)
         if attention_mask is not None:
@@ -288,7 +288,7 @@ class TinyRecursiveModel(nn.Module):
             return SimpleNamespace(logits=self.output_head(y))
 
         # Ensure targets match input length
-        targets = targets[:, :T]
+        targets = targets[:, :T].clamp(0, self.vocab_size - 1)
 
         # Training with deep supervision
         total_loss = 0.0
