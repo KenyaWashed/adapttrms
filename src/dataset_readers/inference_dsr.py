@@ -79,14 +79,14 @@ class InferenceDatasetReader(torch.utils.data.Dataset):
         for i in range(len(questions)):
             qa = questions[i] + answers[i]
             q = questions[i]
-            tokenized_qa = self.tokenizer.encode_plus(qa, truncation=False, return_tensors="pt", add_special_tokens=self.add_bos_token)
-            tokenized_q = self.tokenizer.encode_plus(q, truncation=False, return_tensors="pt", add_special_tokens=self.add_bos_token)
-            q_mask = tokenized_q.attention_mask.squeeze()
+            tokenized_qa = self.tokenizer(qa, truncation=False, return_tensors="pt", add_special_tokens=self.add_bos_token)
+            tokenized_q = self.tokenizer(q, truncation=False, return_tensors="pt", add_special_tokens=self.add_bos_token)
+            q_mask = tokenized_q["attention_mask"].squeeze()
             if len(q_mask.shape) == 0:
                 q_mask = torch.tensor([1]).to(q_mask)
 
-            input_ids = tokenized_qa.input_ids.squeeze()
-            input_atten_mask = tokenized_qa.attention_mask.squeeze()
+            input_ids = tokenized_qa["input_ids"].squeeze()
+            input_atten_mask = tokenized_qa["attention_mask"].squeeze()
 
             loss_mask = torch.tensor([0] * q_mask.shape[-1] + [1] * (input_ids.shape[-1] - q_mask.shape[-1])).to(input_ids)
 
@@ -119,7 +119,7 @@ class InferenceDatasetReader(torch.utils.data.Dataset):
         entry["infer_a"] = []
         for i in range(len(questions)):
             q = questions[i]
-            tokenized_q = self.tokenizer.encode_plus(
+            tokenized_q = self.tokenizer(
                         q,
                         truncation=True,  # truncate from left for long inputs
                         max_length=self.n_tokens_in_prompt - self.generate_max_len,
@@ -127,8 +127,8 @@ class InferenceDatasetReader(torch.utils.data.Dataset):
                         add_special_tokens=self.add_bos_token,
                         )
 
-            input_ids = tokenized_q.input_ids.squeeze()
-            input_atten_mask = tokenized_q.attention_mask.squeeze()
+            input_ids = tokenized_q["input_ids"].squeeze()
+            input_atten_mask = tokenized_q["attention_mask"].squeeze()
 
             if len(input_ids.shape) == 0:
                 input_ids = input_ids.unsqueeze(0)
