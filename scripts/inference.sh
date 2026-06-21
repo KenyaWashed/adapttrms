@@ -4,6 +4,7 @@ ADD_BOS=$3
 MODEL_PARALLEL=$4
 N_GPU=$5
 MODEL_TYPE=${6:-huggingface}
+VOCAB_SIZE=${7:-50000}
 OUTPUT_DIR='/tmp/output/' # for saving the prediction files
 RES_DIR='/tmp/res/' # for saving the evaluation scores of each task
 CACHE_DIR='/tmp/cache' # for caching hf models and datasets
@@ -27,22 +28,22 @@ echo "N_GPU: ${N_GPU}"
 
 if [ ${N_GPU} == '8' ]; then
     CUDA_VISIBLE_DEVICES='0,1,2,3,4,5,6,7' accelerate launch  --num_processes ${N_GPU} --multi_gpu \
-        inference.py task_name=${TASK} model_name=${MODEL} model_type=${MODEL_TYPE} add_bos_token=${ADD_BOS} \
+        inference.py task_name=${TASK} model_name=${MODEL} model_type=${MODEL_TYPE} add_bos_token=${ADD_BOS} vocab_size=${VOCAB_SIZE} \
         output_dir=${OUTPUT_DIR} res_dir=${RES_DIR} cache_dir=${CACHE_DIR} model_parallel=${MODEL_PARALLEL} \
         hydra.run.dir=/tmp
 elif [ ${N_GPU} == '4' ]; then
     CUDA_VISIBLE_DEVICES='0,1,2,3' accelerate launch  --num_processes ${N_GPU} --multi_gpu \
-        inference.py task_name=${TASK} model_name=${MODEL} model_type=${MODEL_TYPE} add_bos_token=${ADD_BOS} \
+        inference.py task_name=${TASK} model_name=${MODEL} model_type=${MODEL_TYPE} add_bos_token=${ADD_BOS} vocab_size=${VOCAB_SIZE} \
         output_dir=${OUTPUT_DIR} res_dir=${RES_DIR} cache_dir=${CACHE_DIR} model_parallel=${MODEL_PARALLEL} \
         hydra.run.dir=/tmp
 elif [ ${N_GPU} == '2' ]; then
     CUDA_VISIBLE_DEVICES='0,1' accelerate launch  --num_processes ${N_GPU} --multi_gpu \
-        inference.py task_name=${TASK} model_name=${MODEL} model_type=${MODEL_TYPE} add_bos_token=${ADD_BOS} \
+        inference.py task_name=${TASK} model_name=${MODEL} model_type=${MODEL_TYPE} add_bos_token=${ADD_BOS} vocab_size=${VOCAB_SIZE} \
         output_dir=${OUTPUT_DIR} res_dir=${RES_DIR} cache_dir=${CACHE_DIR} model_parallel=${MODEL_PARALLEL} \
         hydra.run.dir=/tmp
 elif [ ${N_GPU} == '1' ]; then
     CUDA_VISIBLE_DEVICES='0' accelerate launch  --num_processes 1 \
-        inference.py task_name=${TASK} model_name=${MODEL} model_type=${MODEL_TYPE} add_bos_token=${ADD_BOS} \
+        inference.py task_name=${TASK} model_name=${MODEL} model_type=${MODEL_TYPE} add_bos_token=${ADD_BOS} vocab_size=${VOCAB_SIZE} \
         output_dir=${OUTPUT_DIR} res_dir=${RES_DIR} cache_dir=${CACHE_DIR} model_parallel=${MODEL_PARALLEL} \
         hydra.run.dir=/tmp
 fi
