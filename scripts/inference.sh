@@ -37,22 +37,22 @@ echo "N_GPU: ${N_GPU}"
 
 if [ ${N_GPU} == '8' ]; then
     CUDA_VISIBLE_DEVICES='0,1,2,3,4,5,6,7' accelerate launch  --num_processes ${N_GPU} --multi_gpu \
-        inference.py task_name=${TASK} model_name=${MODEL} model_type=${MODEL_TYPE} add_bos_token=${ADD_BOS} vocab_size=${VOCAB_SIZE} \
+        inference.py task_name=${TASK} model_name=${MODEL} model_type=${MODEL_TYPE} add_bos_token=${ADD_BOS} vocab_size=${VOCAB_SIZE} ${EXTRA_ARGS[@]} \
         output_dir=${OUTPUT_DIR} res_dir=${RES_DIR} cache_dir=${CACHE_DIR} model_parallel=${MODEL_PARALLEL} \
         hydra.run.dir=/tmp
 elif [ ${N_GPU} == '4' ]; then
     CUDA_VISIBLE_DEVICES='0,1,2,3' accelerate launch  --num_processes ${N_GPU} --multi_gpu \
-        inference.py task_name=${TASK} model_name=${MODEL} model_type=${MODEL_TYPE} add_bos_token=${ADD_BOS} vocab_size=${VOCAB_SIZE} \
+        inference.py task_name=${TASK} model_name=${MODEL} model_type=${MODEL_TYPE} add_bos_token=${ADD_BOS} vocab_size=${VOCAB_SIZE} ${EXTRA_ARGS[@]} \
         output_dir=${OUTPUT_DIR} res_dir=${RES_DIR} cache_dir=${CACHE_DIR} model_parallel=${MODEL_PARALLEL} \
         hydra.run.dir=/tmp
 elif [ ${N_GPU} == '2' ]; then
     CUDA_VISIBLE_DEVICES='0,1' accelerate launch  --num_processes ${N_GPU} --multi_gpu \
-        inference.py task_name=${TASK} model_name=${MODEL} model_type=${MODEL_TYPE} add_bos_token=${ADD_BOS} vocab_size=${VOCAB_SIZE} \
+        inference.py task_name=${TASK} model_name=${MODEL} model_type=${MODEL_TYPE} add_bos_token=${ADD_BOS} vocab_size=${VOCAB_SIZE} ${EXTRA_ARGS[@]} \
         output_dir=${OUTPUT_DIR} res_dir=${RES_DIR} cache_dir=${CACHE_DIR} model_parallel=${MODEL_PARALLEL} \
         hydra.run.dir=/tmp
 elif [ ${N_GPU} == '1' ]; then
     CUDA_VISIBLE_DEVICES='0' accelerate launch  --num_processes 1 \
-        inference.py task_name=${TASK} model_name=${MODEL} model_type=${MODEL_TYPE} add_bos_token=${ADD_BOS} vocab_size=${VOCAB_SIZE} \
+        inference.py task_name=${TASK} model_name=${MODEL} model_type=${MODEL_TYPE} add_bos_token=${ADD_BOS} vocab_size=${VOCAB_SIZE} ${EXTRA_ARGS[@]} \
         output_dir=${OUTPUT_DIR} res_dir=${RES_DIR} cache_dir=${CACHE_DIR} model_parallel=${MODEL_PARALLEL} \
         hydra.run.dir=/tmp
 fi

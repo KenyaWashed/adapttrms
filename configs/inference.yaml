@@ -2,6 +2,7 @@ model_name: ??? # hf model name or custom model type
 task_name: ??? # a string concatenating all the evaluation tasks using `+`
 model_type: huggingface # set to 'custom' to load a custom model via get_model_by_name
 vocab_size: 50000 # vocabulary size for custom models (e.g., TinyRecursiveModel)
+tokenizer_name: ${model_name} # override tokenizer source when using a custom model
 output_dir: /tmp/output # for saving the prediction files
 res_dir: /tmp/res # for saving the evaluation scores of each task
 max_length: 2048 # max length of tokenizer

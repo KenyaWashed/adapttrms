@@ -14,11 +14,19 @@ class InferenceDatasetReader(torch.utils.data.Dataset):
         cache_dir=None,
         max_length=2048,
         generate_max_len=100,
-        add_bos_token=False
+        add_bos_token=False,
+        tokenizer_name=None,
     ) -> None:
         self.task = task_map.cls_dic[task_name]()
+        if tokenizer_name is None:
+            tokenizer_name = model_name
+
+        # For custom models without a tokenizer repo, fall back to a compatible tokenizer.
+        if model_name == "tiny_recursive" and tokenizer_name == "tiny_recursive":
+            tokenizer_name = "gpt2"
+
         self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
+            tokenizer_name,
             cache_dir=cache_dir,
             model_max_length=max_length,
             truncation_side="left",
