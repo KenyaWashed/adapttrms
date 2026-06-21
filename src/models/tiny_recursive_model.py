@@ -346,7 +346,8 @@ class TinyRecursiveModel(nn.Module):
             idx_cond = idx_cond.clamp(0, self.vocab_size - 1)
 
             # Get predictions
-            logits = self(idx_cond)
+            output = self(idx_cond)
+            logits = output.logits if hasattr(output, 'logits') else output
             logits = logits[:, -1, :] / temperature
 
             # Top-k sampling
