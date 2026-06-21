@@ -4,10 +4,6 @@ import torch.nn.functional as F
 import math
 
 
-# ============================================================================
-# Building Blocks: RMSNorm, RotaryEmbedding, SwiGLU, Attention
-# ============================================================================
-
 class RMSNorm(nn.Module):
     """Root Mean Square Layer Normalization"""
     def __init__(self, dim, eps=1e-6):
@@ -317,11 +313,27 @@ class TinyRecursiveModel(nn.Module):
         return total_loss / n_supervision_steps
 
     @torch.no_grad()
-    def generate(self, input_ids, max_new_tokens=50, temperature=0.8, top_k=40):
-        """Generate text autoregressively"""
+    def generate(
+        self,
+        input_ids,
+        attention_mask=None,
+        max_length=None,
+        max_new_tokens=50,
+        temperature=0.8,
+        top_k=40,
+        pad_token_id=None,
+        do_sample=False,
+        stopping_criteria=None,
+        **kwargs,
+    ):
+        """Generate text autoregressively with HuggingFace-style args."""
         self.eval()
 
-        for _ in range(max_new_tokens):
+        if max_length is None:
+            max_length = input_ids.shape[1] + max_new_tokens
+        max_length = min(max_length, self.max_seq_len)
+
+        for _ in range(max_length - input_ids.shape[1]):
             # Crop to max_seq_len - 1 to leave room for prediction
             idx_cond = input_ids[:, -(self.max_seq_len - 1):]
 
@@ -337,8 +349,16 @@ class TinyRecursiveModel(nn.Module):
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = float('-inf')
 
-            probs = F.softmax(logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1)
+            if do_sample:
+                probs = F.softmax(logits, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
+            else:
+                next_token = torch.argmax(logits, dim=-1, keepdim=True)
+
             input_ids = torch.cat([input_ids, next_token], dim=1)
+
+            if stopping_criteria is not None:
+                if stopping_criteria(input_ids, logits):
+                    break
 
         return input_ids
