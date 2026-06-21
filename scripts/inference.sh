@@ -35,6 +35,12 @@ echo "ADD_BOS: ${ADD_BOS}"
 echo "MODEL_PARALLEL: ${MODEL_PARALLEL}"
 echo "N_GPU: ${N_GPU}"
 
+if [ ${MODEL_TYPE} == 'custom' ]; then
+    echo "Custom model detected; forcing single-GPU inference and disabling model_parallel."
+    MODEL_PARALLEL=false
+    N_GPU=1
+fi
+
 if [ ${N_GPU} == '8' ]; then
     CUDA_VISIBLE_DEVICES='0,1,2,3,4,5,6,7' accelerate launch  --num_processes ${N_GPU} --multi_gpu \
         inference.py task_name=${TASK} model_name=${MODEL} model_type=${MODEL_TYPE} add_bos_token=${ADD_BOS} vocab_size=${VOCAB_SIZE} ${EXTRA_ARGS[@]} \

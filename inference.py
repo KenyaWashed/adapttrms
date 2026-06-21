@@ -200,13 +200,16 @@ def main(cfg):
 
     accelerator = Accelerator()
     # load model once and run for many tasks
+    if cfg.model_type == 'custom' and cfg.model_parallel:
+        print('Warning: custom model does not support distributed model_parallel; forcing model_parallel=False.')
+        cfg.model_parallel = False
+
     model = hu.instantiate(cfg.model).half()
     if cfg.model_type == "custom" or not cfg.model_parallel:
         model = model.to(accelerator.device)
         print('map whole custom model to local GPU')
+    model = accelerator.prepare(model)
     model = model.eval()
-    if hasattr(model, "module"):
-        model = model.module
 
     # loop for tasks
     tasks = cfg.task_name.split('+')
