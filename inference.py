@@ -187,9 +187,9 @@ def main(cfg):
     accelerator = Accelerator()
     # load model once and run for many tasks
     model = hu.instantiate(cfg.model).half()
-    if not cfg.model_parallel:  # map whole LLM to each GPU
+    if cfg.model_type == "custom" or not cfg.model_parallel:
         model = model.to(accelerator.device)
-        print('map whole LLM to each GPU')
+        print('map whole custom model to local GPU')
     model = model.eval()
     if hasattr(model, "module"):
         model = model.module
