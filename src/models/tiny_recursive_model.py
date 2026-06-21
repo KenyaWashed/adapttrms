@@ -275,12 +275,12 @@ class TinyRecursiveModel(nn.Module):
 
         x = self.get_embeddings(input_ids)
         if attention_mask is not None:
-            attention_mask = attention_mask[:, :T].unsqueeze(-1).float()
+            attention_mask = attention_mask[:, :T].unsqueeze(-1).to(dtype=x.dtype, device=x.device)
             x = x * attention_mask
 
         # Initialize y and z
-        y = self.y_init.expand(B, T, -1).clone()
-        z = self.z_init.expand(B, T, -1).clone()
+        y = self.y_init.expand(B, T, -1).clone().to(dtype=x.dtype, device=x.device)
+        z = self.z_init.expand(B, T, -1).clone().to(dtype=x.dtype, device=x.device)
 
         if targets is None:
             # Inference: just run deep recursion
