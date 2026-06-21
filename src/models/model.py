@@ -36,6 +36,9 @@ def get_custom_model(model_type, **kwargs):
             "n_improvement_cycles",
         }
         clean_kwargs = {k: v for k, v in kwargs.items() if k in supported_kwargs}
+        # Ensure vocab_size is provided
+        if "vocab_size" not in clean_kwargs:
+            raise ValueError("vocab_size is required for TinyRecursiveModel. Pass it via config or command line.")
         return TinyRecursiveModel(**clean_kwargs)
     else:
         raise ValueError(f"Unknown custom model type: {model_type}")
