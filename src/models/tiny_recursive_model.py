@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+from types import SimpleNamespace
 
 
 class RMSNorm(nn.Module):
@@ -254,24 +255,28 @@ class TinyRecursiveModel(nn.Module):
 
         return y.detach(), z.detach(), self.output_head(y), self.halt_head(y.mean(dim=1))
 
-    def forward(self, input_ids, targets=None, n_supervision_steps=4):
+    def forward(self, input_ids, attention_mask=None, targets=None, n_supervision_steps=4, **kwargs):
         """
         Forward pass with deep supervision.
 
         Args:
             input_ids: [B, T] input token IDs
+            attention_mask: optional [B, T] attention mask
             targets: [B, T] target token IDs (for training)
             n_supervision_steps: number of deep supervision steps
 
         Returns:
             If training: loss
-            If inference: logits
+            If inference: object with logits
         """
         B, T = input_ids.shape
         T = min(T, self.max_seq_len)
         input_ids = input_ids[:, :T]
 
         x = self.get_embeddings(input_ids)
+        if attention_mask is not None:
+            attention_mask = attention_mask[:, :T].unsqueeze(-1).float()
+            x = x * attention_mask
 
         # Initialize y and z
         y = self.y_init.expand(B, T, -1).clone()
@@ -280,7 +285,7 @@ class TinyRecursiveModel(nn.Module):
         if targets is None:
             # Inference: just run deep recursion
             y, z = self.deep_recursion(x, y, z, use_grad=False)
-            return self.output_head(y)
+            return SimpleNamespace(logits=self.output_head(y))
 
         # Ensure targets match input length
         targets = targets[:, :T]
