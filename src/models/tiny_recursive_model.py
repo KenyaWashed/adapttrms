@@ -55,20 +55,21 @@ def apply_rotary_pos_emb(q, k, cos, sin):
 
 
 class SwiGLU(nn.Module):
-    """SwiGLU activation function"""
-    def __init__(self, dim, hidden_dim):
+    """SwiGLU activation function with optional dropout"""
+    def __init__(self, dim, hidden_dim, dropout=0.0):
         super().__init__()
         self.w1 = nn.Linear(dim, hidden_dim, bias=False)
         self.w2 = nn.Linear(hidden_dim, dim, bias=False)
         self.w3 = nn.Linear(dim, hidden_dim, bias=False)
+        self.dropout = nn.Dropout(dropout) if dropout and dropout > 0.0 else nn.Identity()
 
     def forward(self, x):
-        return self.w2(F.silu(self.w1(x)) * self.w3(x))
+        return self.w2(self.dropout(F.silu(self.w1(x)) * self.w3(x)))
 
 
 class CausalSelfAttention(nn.Module):
     """Multi-head causal self-attention with RoPE"""
-    def __init__(self, dim, n_heads, max_seq_len=512):
+    def __init__(self, dim, n_heads, max_seq_len=512, dropout=0.0):
         super().__init__()
         assert dim % n_heads == 0
         self.n_heads = n_heads
@@ -77,6 +78,10 @@ class CausalSelfAttention(nn.Module):
         self.qkv = nn.Linear(dim, 3 * dim, bias=False)
         self.proj = nn.Linear(dim, dim, bias=False)
         self.rope = RotaryEmbedding(self.head_dim, max_seq_len)
+
+        # Dropouts
+        self.attn_dropout = nn.Dropout(dropout) if dropout and dropout > 0.0 else nn.Identity()
+        self.resid_dropout = nn.Dropout(dropout) if dropout and dropout > 0.0 else nn.Identity()
 
         # Causal mask
         mask = torch.triu(torch.ones(max_seq_len, max_seq_len), diagonal=1).bool()
@@ -98,24 +103,26 @@ class CausalSelfAttention(nn.Module):
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_dim))
         att = att.masked_fill(self.mask[:T, :T], float('-inf'))
         att = F.softmax(att, dim=-1)
+        att = self.attn_dropout(att)
 
         y = att @ v
         y = y.transpose(1, 2).contiguous().view(B, T, C)
-        return self.proj(y)
+        return self.resid_dropout(self.proj(y))
 
 
 class TransformerBlock(nn.Module):
     """Single transformer block with pre-norm"""
-    def __init__(self, dim, n_heads, mlp_ratio=4, max_seq_len=512):
+    def __init__(self, dim, n_heads, mlp_ratio=4, max_seq_len=512, dropout=0.0):
         super().__init__()
         self.norm1 = RMSNorm(dim)
-        self.attn = CausalSelfAttention(dim, n_heads, max_seq_len)
+        self.attn = CausalSelfAttention(dim, n_heads, max_seq_len, dropout=dropout)
         self.norm2 = RMSNorm(dim)
-        self.mlp = SwiGLU(dim, dim * mlp_ratio)
+        self.mlp = SwiGLU(dim, dim * mlp_ratio, dropout=dropout)
+        self.dropout = nn.Dropout(dropout) if dropout and dropout > 0.0 else nn.Identity()
 
     def forward(self, x):
-        x = x + self.attn(self.norm1(x))
-        x = x + self.mlp(self.norm2(x))
+        x = x + self.dropout(self.attn(self.norm1(x)))
+        x = x + self.dropout(self.mlp(self.norm2(x)))
         return x
 
 
@@ -128,10 +135,10 @@ class TinyRecursiveNetwork(nn.Module):
     The core tiny network used in TRM.
     Only 2 layers as per the paper's finding that smaller is better.
     """
-    def __init__(self, dim, n_heads=8, n_layers=2, mlp_ratio=4, max_seq_len=512):
+    def __init__(self, dim, n_heads=8, n_layers=2, mlp_ratio=4, max_seq_len=512, dropout=0.0):
         super().__init__()
         self.layers = nn.ModuleList([
-            TransformerBlock(dim, n_heads, mlp_ratio, max_seq_len)
+            TransformerBlock(dim, n_heads, mlp_ratio, max_seq_len, dropout=dropout)
             for _ in range(n_layers)
         ])
         self.norm = RMSNorm(dim)
@@ -168,6 +175,9 @@ class TinyRecursiveModel(nn.Module):
         max_seq_len=256,
         n_latent_recursions=6,  # n in the paper
         n_improvement_cycles=3,  # T in the paper
+        dropout=0.0,
+        tie_embeddings=False,
+        use_checkpoint=False,
     ):
         super().__init__()
         self.dim = dim
@@ -179,9 +189,10 @@ class TinyRecursiveModel(nn.Module):
         # Embeddings
         self.token_emb = nn.Embedding(vocab_size, dim)
         self.pos_emb = nn.Embedding(max_seq_len, dim)
+        self.emb_dropout = nn.Dropout(dropout) if dropout and dropout > 0.0 else nn.Identity()
 
         # Single tiny network (key insight: one network is better than two)
-        self.net = TinyRecursiveNetwork(dim, n_heads, n_layers, mlp_ratio, max_seq_len)
+        self.net = TinyRecursiveNetwork(dim, n_heads, n_layers, mlp_ratio, max_seq_len, dropout=dropout)
 
         # Projection layers for combining x, y, z
         self.combine_xyz = nn.Linear(dim * 3, dim, bias=False)
@@ -197,7 +208,17 @@ class TinyRecursiveModel(nn.Module):
         self.y_init = nn.Parameter(torch.randn(1, 1, dim) * 0.02)
         self.z_init = nn.Parameter(torch.randn(1, 1, dim) * 0.02)
 
+        self.tie_embeddings = tie_embeddings
+        self.use_checkpoint = use_checkpoint
+
         self._init_weights()
+
+        # Optionally tie embedding and output weights (helps sample efficiency)
+        if self.tie_embeddings:
+            try:
+                self.output_head.weight = self.token_emb.weight
+            except Exception:
+                pass
 
     def _init_weights(self):
         for module in self.modules():
@@ -214,7 +235,7 @@ class TinyRecursiveModel(nn.Module):
         # Clamp position to max_seq_len
         T = min(T, self.max_seq_len)
         pos = torch.arange(T, device=input_ids.device).unsqueeze(0)
-        return self.token_emb(input_ids[:, :T]) + self.pos_emb(pos)
+        return self.emb_dropout(self.token_emb(input_ids[:, :T]) + self.pos_emb(pos))
 
     def latent_recursion(self, x, y, z):
         """
