@@ -1,3 +1,4 @@
+import re
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,6 +16,39 @@ class RMSNorm(nn.Module):
     def forward(self, x):
         rms = torch.sqrt(torch.mean(x ** 2, dim=-1, keepdim=True) + self.eps)
         return x / rms * self.weight
+
+
+class DropPath(nn.Module):
+    """Stochastic depth / LayerDrop."""
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x, drop_prob: float = 0.0):
+        if drop_prob <= 0.0 or not self.training:
+            return x
+        keep_prob = 1.0 - drop_prob
+        if x.dim() == 4:
+            shape = [x.shape[0], 1, 1, 1]
+        else:
+            shape = [x.shape[0]] + [1] * (x.dim() - 1)
+        random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+        binary_tensor = torch.floor(random_tensor)
+        return x.div(keep_prob) * binary_tensor
+
+
+class DomainAdapter(nn.Module):
+    """Lightweight adapter injected into adapter-enabled TRM blocks."""
+    def __init__(self, dim, hidden_dim=None, dropout=0.0):
+        super().__init__()
+        hidden_dim = hidden_dim if hidden_dim is not None else max(1, dim // 2)
+        self.down = nn.Linear(dim, hidden_dim, bias=False)
+        self.act = nn.SiLU()
+        self.up = nn.Linear(hidden_dim, dim, bias=False)
+        self.dropout = nn.Dropout(dropout) if dropout and dropout > 0.0 else nn.Identity()
+        nn.init.zeros_(self.up.weight)
+
+    def forward(self, x):
+        return self.up(self.dropout(self.act(self.down(x))))
 
 
 class RotaryEmbedding(nn.Module):
@@ -112,17 +146,54 @@ class CausalSelfAttention(nn.Module):
 
 class TransformerBlock(nn.Module):
     """Single transformer block with pre-norm"""
-    def __init__(self, dim, n_heads, mlp_ratio=4, max_seq_len=512, dropout=0.0):
+    def __init__(
+        self,
+        dim,
+        n_heads,
+        mlp_ratio=4,
+        max_seq_len=512,
+        dropout=0.0,
+        is_adapter_layer=False,
+        adapter_dropout=0.0,
+        alpha=1.0,
+        beta=1.0,
+        rezero_init=False,
+    ):
         super().__init__()
+        self.beta = beta
+        self.rezero_init = rezero_init
         self.norm1 = RMSNorm(dim)
         self.attn = CausalSelfAttention(dim, n_heads, max_seq_len, dropout=dropout)
         self.norm2 = RMSNorm(dim)
         self.mlp = SwiGLU(dim, dim * mlp_ratio, dropout=dropout)
         self.dropout = nn.Dropout(dropout) if dropout and dropout > 0.0 else nn.Identity()
+        self.is_adapter_layer = is_adapter_layer
+        self.adapter = DomainAdapter(dim, dropout=adapter_dropout) if is_adapter_layer else None
+        self.adapter_scalar = nn.Parameter(torch.zeros(1)) if is_adapter_layer else None
 
-    def forward(self, x):
-        x = x + self.dropout(self.attn(self.norm1(x)))
-        x = x + self.dropout(self.mlp(self.norm2(x)))
+        if self.rezero_init:
+            self.alpha = nn.Parameter(torch.zeros(1))
+        else:
+            self.alpha = alpha
+        self.drop_path = DropPath()
+
+    def forward(self, x, drop_prob: float = 0.0):
+        residual = x
+        x = self.norm1(x)
+        x = self.attn(x) * self.beta
+        x = self.dropout(x)
+        x = residual + self.alpha * x
+        x = self.drop_path(x, drop_prob)
+
+        residual = x
+        x = self.norm2(x)
+        x = self.mlp(x) * self.beta
+        x = self.dropout(x)
+        x = residual + self.alpha * x
+        x = self.drop_path(x, drop_prob)
+
+        if self.is_adapter_layer:
+            x = x + self.adapter_scalar * self.adapter(x)
         return x
 
 
@@ -133,19 +204,48 @@ class TransformerBlock(nn.Module):
 class TinyRecursiveNetwork(nn.Module):
     """
     The core tiny network used in TRM.
-    Only 2 layers as per the paper's finding that smaller is better.
+    This supports depth scaling, interleaved adapters, DeepNorm, and LayerDrop.
     """
-    def __init__(self, dim, n_heads=8, n_layers=2, mlp_ratio=4, max_seq_len=512, dropout=0.0):
+    def __init__(
+        self,
+        dim,
+        n_heads=8,
+        n_layers=2,
+        mlp_ratio=4,
+        max_seq_len=512,
+        dropout=0.0,
+        adapter_dropout=0.0,
+        adapter_every_k=2,
+    ):
         super().__init__()
+        assert n_layers > 0, "n_layers must be positive"
+        self.n_layers = n_layers
+        self.adapter_every_k = adapter_every_k
+
+        deepnorm_alpha = (2 * n_layers) ** 0.25
+        deepnorm_beta = (2 * n_layers) ** -0.25
+
         self.layers = nn.ModuleList([
-            TransformerBlock(dim, n_heads, mlp_ratio, max_seq_len, dropout=dropout)
-            for _ in range(n_layers)
+            TransformerBlock(
+                dim,
+                n_heads,
+                mlp_ratio,
+                max_seq_len,
+                dropout=dropout,
+                is_adapter_layer=(layer_idx % adapter_every_k == 0),
+                adapter_dropout=adapter_dropout,
+                alpha=deepnorm_alpha,
+                beta=deepnorm_beta,
+                rezero_init=(layer_idx % 2 == 1),
+            )
+            for layer_idx in range(n_layers)
         ])
         self.norm = RMSNorm(dim)
 
     def forward(self, x):
-        for layer in self.layers:
-            x = layer(x)
+        for layer_idx, layer in enumerate(self.layers):
+            p = 0.15 * layer_idx / max(1, self.n_layers - 1)
+            x = layer(x, drop_prob=p)
         return self.norm(x)
 
 
@@ -192,7 +292,17 @@ class TinyRecursiveModel(nn.Module):
         self.emb_dropout = nn.Dropout(dropout) if dropout and dropout > 0.0 else nn.Identity()
 
         # Single tiny network (key insight: one network is better than two)
-        self.net = TinyRecursiveNetwork(dim, n_heads, n_layers, mlp_ratio, max_seq_len, dropout=dropout)
+        effective_n_layers = n_layers * 2
+        self.net = TinyRecursiveNetwork(
+            dim,
+            n_heads,
+            effective_n_layers,
+            mlp_ratio,
+            max_seq_len,
+            dropout=dropout,
+            adapter_dropout=dropout,
+            adapter_every_k=2,
+        )
 
         # Projection layers for combining x, y, z
         self.combine_xyz = nn.Linear(dim * 3, dim, bias=False)
@@ -227,6 +337,12 @@ class TinyRecursiveModel(nn.Module):
             elif isinstance(module, nn.Embedding):
                 torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
+        for module in self.modules():
+            if isinstance(module, TransformerBlock) and module.beta != 1.0:
+                nn.init.constant_(module.attn.proj.weight, module.attn.proj.weight * module.beta)
+                nn.init.constant_(module.mlp.w2.weight, module.mlp.w2.weight * module.beta)
+                nn.init.constant_(module.mlp.w3.weight, module.mlp.w3.weight * module.beta)
+
     def get_embeddings(self, input_ids):
         """Get token + position embeddings"""
         B, T = input_ids.shape
@@ -236,6 +352,43 @@ class TinyRecursiveModel(nn.Module):
         T = min(T, self.max_seq_len)
         pos = torch.arange(T, device=input_ids.device).unsqueeze(0)
         return self.emb_dropout(self.token_emb(input_ids[:, :T]) + self.pos_emb(pos))
+
+    def get_depth_scaled_optimizer_groups(self, base_lr, decay_rate=0.85):
+        """Create optimizer groups with layer-wise learning rate decay and adapter/full lr exceptions."""
+        layer_ids = []
+        for name, module in self.named_modules():
+            if isinstance(module, TransformerBlock):
+                match = re.search(r'net\.layers\.(\d+)', name)
+                if match:
+                    layer_ids.append(int(match.group(1)))
+        max_layer = max(layer_ids) if layer_ids else 0
+
+        groups = {}
+        for name, param in self.named_parameters():
+            if not param.requires_grad:
+                continue
+
+            if (
+                'adapter' in name
+                or 'combine_' in name
+                or 'output_head' in name
+                or 'halt_head' in name
+                or 'token_emb' in name
+                or 'pos_emb' in name
+            ):
+                lr = base_lr
+            else:
+                match = re.search(r'net\.layers\.(\d+)', name)
+                if match:
+                    layer_idx = int(match.group(1))
+                    depth_from_top = max_layer - layer_idx
+                    lr = base_lr * (decay_rate ** depth_from_top)
+                else:
+                    lr = base_lr
+
+            groups.setdefault(lr, []).append(param)
+
+        return [{'params': params, 'lr': lr} for lr, params in groups.items()]
 
     def latent_recursion(self, x, y, z):
         """

@@ -205,6 +205,8 @@ def main(cfg):
         cfg.model_parallel = False
 
     model = hu.instantiate(cfg.model).half()
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f'Model parameter count: {total_params:,}')
     if cfg.model_type == "custom" or not cfg.model_parallel:
         model = model.to(accelerator.device)
         print('map whole custom model to local GPU')
