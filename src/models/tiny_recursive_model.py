@@ -36,11 +36,11 @@ class DropPath(nn.Module):
         return x.div(keep_prob) * binary_tensor
 
 
-class DomainAdapter(nn.Module):
-    """Lightweight adapter injected into adapter-enabled TRM blocks."""
+class AdapterExpert(nn.Module):
+    """Single adapter expert for task routing in Mixture of Adapters."""
     def __init__(self, dim, hidden_dim=None, dropout=0.0):
         super().__init__()
-        hidden_dim = hidden_dim if hidden_dim is not None else max(1, dim // 2)
+        hidden_dim = hidden_dim if hidden_dim is not None else max(1, dim // 4)
         self.down = nn.Linear(dim, hidden_dim, bias=False)
         self.act = nn.SiLU()
         self.up = nn.Linear(hidden_dim, dim, bias=False)
@@ -49,6 +49,60 @@ class DomainAdapter(nn.Module):
 
     def forward(self, x):
         return self.up(self.dropout(self.act(self.down(x))))
+
+
+class MixtureOfAdapters(nn.Module):
+    """Mixture-of-Adapters routing module with lightweight expert selection."""
+    def __init__(self, dim, num_experts=4, hidden_dim=None, dropout=0.0):
+        super().__init__()
+        hidden_dim = hidden_dim if hidden_dim is not None else max(1, dim // 4)
+        self.num_experts = num_experts
+        self.experts = nn.ModuleList([
+            AdapterExpert(dim, hidden_dim, dropout=dropout)
+            for _ in range(num_experts)
+        ])
+        self.router = nn.Linear(dim, num_experts, bias=True)
+        nn.init.zeros_(self.router.weight)
+        nn.init.zeros_(self.router.bias)
+
+    def forward(self, x):
+        # x: [B, T, dim]
+        logits = self.router(x)
+        weights = F.softmax(logits, dim=-1)
+        outputs = torch.stack([expert(x) for expert in self.experts], dim=-1)
+        return (outputs * weights.unsqueeze(-2)).sum(dim=-1)
+
+
+class NumericalProjector(nn.Module):
+    """Embed auxiliary numeric values directly into the model latent space."""
+    def __init__(self, dim, hidden_dim=None, input_dim=1):
+        super().__init__()
+        hidden_dim = hidden_dim if hidden_dim is not None else max(1, dim // 4)
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, dim),
+        )
+
+    def forward(self, x):
+        if x.dim() == 2:
+            x = x.unsqueeze(-1)
+        return self.net(x)
+
+
+class NumericalFusion(nn.Module):
+    """Fuse numeric embeddings with the latent reasoning state."""
+    def __init__(self, dim, hidden_dim=None):
+        super().__init__()
+        hidden_dim = hidden_dim if hidden_dim is not None else max(1, dim // 2)
+        self.net = nn.Sequential(
+            nn.Linear(dim * 2, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, dim),
+        )
+
+    def forward(self, z, num_emb):
+        return self.net(torch.cat([z, num_emb], dim=-1))
 
 
 class RotaryEmbedding(nn.Module):
@@ -168,7 +222,7 @@ class TransformerBlock(nn.Module):
         self.mlp = SwiGLU(dim, dim * mlp_ratio, dropout=dropout)
         self.dropout = nn.Dropout(dropout) if dropout and dropout > 0.0 else nn.Identity()
         self.is_adapter_layer = is_adapter_layer
-        self.adapter = DomainAdapter(dim, dropout=adapter_dropout) if is_adapter_layer else None
+        self.adapter = MixtureOfAdapters(dim, num_experts=4, hidden_dim=max(1, dim // 4), dropout=adapter_dropout) if is_adapter_layer else None
         self.adapter_scalar = nn.Parameter(torch.zeros(1)) if is_adapter_layer else None
 
         if self.rezero_init:
@@ -268,11 +322,11 @@ class TinyRecursiveModel(nn.Module):
     def __init__(
         self,
         vocab_size,
-        dim=256,
-        n_heads=8,
-        n_layers=2,
+        dim=768,
+        n_heads=12,
+        n_layers=4,
         mlp_ratio=4,
-        max_seq_len=256,
+        max_seq_len=2048,
         n_latent_recursions=6,  # n in the paper
         n_improvement_cycles=3,  # T in the paper
         dropout=0.0,
