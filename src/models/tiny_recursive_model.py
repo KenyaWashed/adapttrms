@@ -339,9 +339,9 @@ class TinyRecursiveModel(nn.Module):
 
         for module in self.modules():
             if isinstance(module, TransformerBlock) and module.beta != 1.0:
-                nn.init.constant_(module.attn.proj.weight, module.attn.proj.weight * module.beta)
-                nn.init.constant_(module.mlp.w2.weight, module.mlp.w2.weight * module.beta)
-                nn.init.constant_(module.mlp.w3.weight, module.mlp.w3.weight * module.beta)
+                module.attn.proj.weight.data.mul_(module.beta)
+                module.mlp.w2.weight.data.mul_(module.beta)
+                module.mlp.w3.weight.data.mul_(module.beta)
 
     def get_embeddings(self, input_ids):
         """Get token + position embeddings"""
